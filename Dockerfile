@@ -24,4 +24,4 @@ RUN chmod +x start.sh
 EXPOSE 5000
 
 # 6. Run the script
-CMD ["./start.sh"]
+CMD ["./start.min.sh"]

@@ -19,6 +19,7 @@ chromium \
   --no-sandbox \
   --disable-gpu \
   --disable-dev-shm-usage \
+  --renderer-process-limit=2 \
   --user-data-dir="/tmp/render_profile" \
   --load-extension="/app/my-extension" \
   --proxy-server="http://user:pass@host:port" \

@@ -2,7 +2,7 @@ version: '3.8'
 services:
   gpt-bridge:
     build: .
-    container_name: gpt_pc
+    container_name: gpt_api_bridge
     # CRITICAL: Use Host Network so Cloudflare sees your Real IP
     network_mode: host
     # We only map the code files so you can tweak them without rebuilding

@@ -1,12 +1,11 @@
-// CONTENT SCRIPT V2 (Message Passing)
+// CONTENT SCRIPT V2.1 (Streaming Support)
 
 (function() {
     'use strict';
 
-    // --- VISIBILITY HACKS ---
+    // --- VISIBILITY HACKS (Unchanged) ---
     Object.defineProperty(document, 'visibilityState', { get: () => 'visible', configurable: true });
     Object.defineProperty(document, 'hidden', { get: () => false, configurable: true });
-    Object.defineProperty(document, 'hasFocus', { value: () => true, configurable: true });
     window.requestAnimationFrame = (cb) => setTimeout(() => cb(performance.now()), 16);
 
     // --- UI INIT ---
@@ -14,135 +13,128 @@
         if (document.getElementById('gpt-bridge-ui')) return;
         const ui = document.createElement('div');
         ui.id = 'gpt-bridge-ui';
-        // PURPLE BADGE = Version 2.0 (Background Worker Mode)
         ui.style.cssText = "position:fixed; top:10px; right:10px; padding:8px 12px; background:#8e44ad; color:#fff; z-index:99999; font-family:monospace; font-size:12px; border-radius:4px; opacity:0.8; pointer-events:none;";
-        ui.innerText = "EXT V2.0"; 
+        ui.innerText = "BRIDGE READY"; 
         document.body.appendChild(ui);
-        tryStartAudio();
         startPolling();
     }
 
     function updateStatus(msg, color="#8e44ad") {
         const ui = document.getElementById('gpt-bridge-ui');
-        if (ui) {
-            ui.innerText = msg;
-            ui.style.backgroundColor = color;
-        }
+        if (ui) { ui.innerText = msg; ui.style.backgroundColor = color; }
     }
 
-    // --- AUDIO ---
-    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const silence = audioCtx.createBuffer(1, 1000, 44100);
-    const source = audioCtx.createBufferSource();
-    source.buffer = silence;
-    source.loop = true;
-    source.connect(audioCtx.destination);
-    
-    function tryStartAudio() {
-        if (audioCtx.state === 'suspended') {
-            audioCtx.resume();
-            try { source.start(0); } catch(e){}
-        }
-    }
-    document.addEventListener('click', tryStartAudio, {once:true});
-
-    // --- LOGIC ---
     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
     function killPopups() {
-        const closeBtns = document.querySelectorAll('button[aria-label="Close"]');
-        closeBtns.forEach(btn => btn.click());
-        const links = document.querySelectorAll('a');
-        for (let l of links) {
-            if (l.innerText.includes('Stay logged out')) {
-                l.click();
-                return true;
-            }
-        }
-        return false;
+        document.querySelectorAll('button[aria-label="Close"]').forEach(btn => btn.click());
     }
 
-    async function runJob(prompt) {
-        updateStatus("🤖 WORKING", "#d35400");
-        tryStartAudio();
+    // --- MAIN LOGIC ---
+
+    async function runJob(job) {
+        updateStatus(job.stream ? "🌊 STREAMING" : "🤖 WORKING", "#d35400");
         killPopups();
         
+        // 1. Find Input
         let editor = document.querySelector('#prompt-textarea');
-        if (!editor) {
-            for(let i=0; i<10; i++) {
-                await sleep(200);
-                editor = document.querySelector('#prompt-textarea');
-                if(editor) break;
-            }
-        }
         if (!editor) {
             updateStatus("ERR: NO INPUT", "red");
             setTimeout(() => window.location.reload(), 2000);
             return;
         }
 
+        // 2. Type Prompt
         editor.focus();
         document.execCommand('selectAll', false, null);
-        document.execCommand('insertText', false, prompt);
-        await sleep(500);
+        document.execCommand('insertText', false, job.prompt);
+        await sleep(300);
 
-        const btn = document.querySelector('[data-testid="send-button"]') || 
-                    document.querySelector('button[aria-label="Send prompt"]');
-        
-        if (btn && !btn.disabled) btn.click();
-        else {
-             editor.dispatchEvent(new KeyboardEvent('keydown', {
-                bubbles: true, cancelable: true, key: 'Enter', code: 'Enter', charCode: 13
-            }));
-        }
+        // 3. Click Send
+        const btn = document.querySelector('[data-testid="send-button"]') || document.querySelector('button[aria-label="Send prompt"]');
+        if (btn) btn.click();
+        else editor.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Enter', code: 'Enter', charCode: 13 }));
 
-        updateStatus("⏳ READING", "#2980b9");
-        monitorResponse();
+        // 4. Read Response
+        monitorResponse(job);
     }
 
-    function monitorResponse() {
+    function monitorResponse(job) {
         let stableChecks = 0;
-        let lastLen = 0;
+        let lastFullText = ""; // Full text seen so far
+        let lastReportedLen = 0; // Length we have already sent to server
         let checks = 0;
-        const initialMsgCount = document.querySelectorAll('.markdown').length; 
+        
+        // Capture the initial number of markdown blocks to identify the NEW one
+        const initialCount = document.querySelectorAll('.markdown').length; 
 
         const timer = setInterval(() => {
             checks++;
-            if (killPopups()) checks = 0;
+            killPopups();
+            
+            // Failsafe: Reload if stuck for too long (60s)
             if (checks > 120) { clearInterval(timer); window.location.reload(); return; }
 
-            document.body.offsetHeight; 
-
+            // Get all message bubbles
             const msgs = document.querySelectorAll('.markdown');
-            if (msgs.length <= initialMsgCount) return; 
+            
+            // Wait until a new bubble appears
+            if (msgs.length <= initialCount) return; 
 
-            const currentText = msgs[msgs.length - 1].innerText;
-            if (!currentText.trim()) return;
+            // Get the text of the *last* bubble (the one generating now)
+            const currentEl = msgs[msgs.length - 1];
+            const currentText = currentEl.innerText;
 
-            if (currentText.length === lastLen) stableChecks++;
-            else { stableChecks = 0; lastLen = currentText.length; }
-
-            if (stableChecks >= 5) {
-                clearInterval(timer);
-                sendResult(currentText);
+            // --- STREAMING LOGIC ---
+            if (job.stream) {
+                // If text grew, send the delta
+                if (currentText.length > lastReportedLen) {
+                    const delta = currentText.substring(lastReportedLen);
+                    lastReportedLen = currentText.length;
+                    
+                    // Send chunk to background -> server
+                    chrome.runtime.sendMessage({ 
+                        action: "chunk", 
+                        data: { chunk: delta } 
+                    });
+                }
             }
-        }, 500);
+
+            // --- STABILITY CHECK (Determine when done) ---
+            if (currentText.length === lastFullText.length && currentText.trim().length > 0) {
+                stableChecks++;
+            } else {
+                stableChecks = 0;
+                lastFullText = currentText;
+            }
+
+            // If text hasn't changed for 1.5 seconds (3 checks * 500ms), assume done
+            if (stableChecks >= 3) {
+                clearInterval(timer);
+                finishJob(job, currentText);
+            }
+        }, 50);
     }
 
-    // --- MESSAGE PASSING (Fixes CSP) ---
-    function sendResult(text) {
-        updateStatus("🚀 SENDING", "#27ae60");
-        chrome.runtime.sendMessage({ action: "reply", data: { answer: text } }, (response) => {
+    function finishJob(job, finalAnswer) {
+        updateStatus("🚀 DONE", "#27ae60");
+        
+        // If streaming, we just say "We are done", server handles the rest.
+        // If blocking, we send the whole answer.
+        const payload = job.stream ? { status: "DONE" } : { answer: finalAnswer };
+
+        chrome.runtime.sendMessage({ action: "reply", data: payload }, () => {
+             // Reset page for next job
             window.location.href = "https://chatgpt.com/?new=" + Date.now();
         });
     }
 
+    // --- POLLING LOOP ---
     function checkQueue() {
-        killPopups();
         chrome.runtime.sendMessage({ action: "poll" }, (response) => {
             if (response && response.success && response.data.has_work) {
                 clearInterval(pollInterval);
-                runJob(response.data.prompt);
+                runJob(response.data); // Pass the whole job object (contains id, prompt, stream)
             }
         });
     }
@@ -151,12 +143,9 @@
     function startPolling() {
         if (pollInterval) clearInterval(pollInterval);
         pollInterval = setInterval(checkQueue, 2000);
-        updateStatus("🟣 LISTENING", "#8e44ad");
     }
 
-    if (document.readyState === 'complete' || document.readyState === 'interactive') {
-        initUI();
-    } else {
-        document.addEventListener('DOMContentLoaded', initUI);
-    }
+    if (document.readyState === 'complete') initUI();
+    else document.addEventListener('DOMContentLoaded', initUI);
+
 })();

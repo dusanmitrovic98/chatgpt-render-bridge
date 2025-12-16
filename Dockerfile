@@ -1,27 +1,33 @@
-# Use a lightweight Python base
 FROM python:3.10-slim
 
-# 1. Install System Dependencies (Chromium, Xvfb, etc.)
+# Install Chromium, Xvfb, and deps
 RUN apt-get update && apt-get install -y \
     chromium \
     xvfb \
-    x11-utils \
     procps \
     && rm -rf /var/lib/apt/lists/*
 
-# 2. Set working directory
 WORKDIR /app
 
-# 3. Copy files
+# Install Python deps
 COPY requirements.txt .
-RUN pip install -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy files
 COPY . .
 
-# 4. Make the start script executable
-RUN chmod +x start.sh
+# Environment variables for Chromium
+ENV DISPLAY=:99
+ENV PYTHONUNBUFFERED=1
 
-# 5. Expose the port (Render uses standard 10000 usually, or we configure env)
-EXPOSE 5000
+# Create the startup script dynamically
+RUN echo '#!/bin/bash\n\
+rm -f /tmp/.X99-lock\n\
+Xvfb :99 -screen 0 1280x1024x24 &\n\
+sleep 2\n\
+python server_openai.py &\n\
+sleep 2\n\
+chromium --no-sandbox --disable-gpu --disable-dev-shm-usage --user-data-dir="/data/profile" --load-extension="/app/my-extension" "https://chatgpt.com/?new=$(date +%s)"\n\
+' > start.sh && chmod +x start.sh
 
-# 6. Run the script
-CMD ["./start.min.sh"]
+CMD ["./start.sh"]

@@ -1,12 +1,13 @@
 version: '3.8'
 services:
-  chatgpt-bridge:
+  gpt-bridge:
     build: .
-    container_name: gpt_bridge
-    network_mode: host  # <--- CRITICAL: Uses your PC's IP to bypass Cloudflare
+    container_name: gpt_pc
+    # CRITICAL: Use Host Network so Cloudflare sees your Real IP
+    network_mode: host
+    # We only map the code files so you can tweak them without rebuilding
     volumes:
-      - gpt_profile:/data/profile 
+      - ./my-extension:/app/my-extension
+      - ./server_openai.py:/app/server_openai.py
+    # If it crashes, restart it automatically
     restart: unless-stopped
-
-volumes:
-  gpt_profile:

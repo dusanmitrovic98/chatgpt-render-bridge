@@ -1,6 +1,6 @@
 FROM python:3.10-slim
 
-# Install Chromium, Xvfb, and deps
+# 1. Install Chrome & Xvfb
 RUN apt-get update && apt-get install -y \
     chromium \
     xvfb \
@@ -9,25 +9,27 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Install Python deps
+# 2. Install Python Deps
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy files
+# 3. Copy Code
 COPY . .
 
-# Environment variables for Chromium
+# 4. Environment
 ENV DISPLAY=:99
 ENV PYTHONUNBUFFERED=1
 
-# Create the startup script dynamically
+# 5. Startup Script (Stateless)
+# We use /tmp/chrome_profile so it wipes every time
 RUN echo '#!/bin/bash\n\
 rm -f /tmp/.X99-lock\n\
 Xvfb :99 -screen 0 1280x1024x24 &\n\
 sleep 2\n\
 python server_openai.py &\n\
 sleep 2\n\
-chromium --no-sandbox --disable-gpu --disable-dev-shm-usage --user-data-dir="/data/profile" --load-extension="/app/my-extension" "https://chatgpt.com/?new=$(date +%s)"\n\
+echo "👻 Starting Stateless Chromium..."\n\
+chromium --no-sandbox --disable-gpu --disable-dev-shm-usage --user-data-dir="/tmp/chrome_profile" --load-extension="/app/my-extension" "https://chatgpt.com/?new=$(date +%s)"\n\
 ' > start.sh && chmod +x start.sh
 
 CMD ["./start.sh"]

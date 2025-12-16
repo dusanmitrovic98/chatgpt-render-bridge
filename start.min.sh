@@ -1,26 +1,19 @@
 #!/bin/bash
 
-echo "🚀 Starting Render Automation (Low RAM Mode)..."
+echo "🚀 Starting Render Automation (Stable Mode)..."
 
-# 1. Start Xvfb (Virtual Monitor)
-# Lower resolution = Less RAM usage for video buffer
+# 1. Start Xvfb
+# Using 16-bit color depth to save RAM
 export DISPLAY=:99
 Xvfb :99 -screen 0 1024x768x16 &
 sleep 2
 
-# 2. Start Python Server (Background)
+# 2. Start Python Server
 python server_openai.py &
 sleep 2
 
-# 3. Start Chromium (THE DIET VERSION)
+# 3. Start Chromium
 echo "👻 Launching Chromium..."
-
-# FLAGS EXPLAINED:
-# --renderer-process-limit=1: Forces Chrome to use FEWER processes (Saves ~100MB)
-# --disable-site-isolation-trials: Disables security sandbox (Saves ~50MB)
-# --disable-extensions-except: Only load OUR extension, nothing else.
-# --disable-dev-shm-usage: Prevents crash in Docker
-# --no-zygote: Reduces process startup overhead
 
 chromium \
   --no-sandbox \
@@ -31,9 +24,7 @@ chromium \
   --disable-default-apps \
   --disable-extensions-except="/app/my-extension" \
   --load-extension="/app/my-extension" \
-  --renderer-process-limit=1 \
+  --renderer-process-limit=2 \
   --disable-site-isolation-trials \
-  --no-zygote \
-  --single-process \
   --user-data-dir="/tmp/render_profile" \
   "https://chatgpt.com/?new=$(date +%s)"
